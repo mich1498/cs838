@@ -66,8 +66,8 @@ class CustomConv2DFunction(Function):
     W_o = 1 + int((ctx.input_width + 2*padding - kernel_size) // stride)
     windows = unfold(input_feats, kernel_size, padding=padding, stride=stride)
     kernels = weight.view(C_o, C_i * kernel_size * kernel_size)
-    output = torch.einsum('ncw,oc->now', windows, kernels).view(-1, C_o, H_o, W_o)
-    output.add_(bias.view(1,-1,1,1).expand(ctx.batch_size,-1,H_o,W_o))
+    output = torch.einsum('ncw,oc->now', windows, kernels).view(-1, C_o, H_o, W_o) \
+            + (bias.view(1,-1,1,1).expand(ctx.batch_size,-1,H_o,W_o))
 
     # save for backward (you need to save the unfolded tensor into ctx)
     ctx.save_for_backward(windows, weight, bias)
@@ -104,16 +104,17 @@ class CustomConv2DFunction(Function):
     # Fill in the code here
     #################################################################################
     # compute the gradients w.r.t. input and params
-    C_i = weight.size(2)
-    N, C_o, H_o, W_o = grad_output.size()
+    C_i = weight.size(1)
+    C_o, H_o, W_o = grad_output.size()[1:]
     if ctx.needs_input_grad[0]:
-        grad_windows = torch.einsum('nouv,oiab->niuvab', grad_output, weight)
+        grad_windows = torch.einsum('nouv,oiab->niabuv', grad_output, weight)\
+                            .view(batch_size, C_i*kernel_size*kernel_size, -1)
         grad_input = fold(grad_windows, (input_height, input_width),
                         kernel_size, padding=padding, stride=stride)
     if ctx.needs_input_grad[1]:
         grad_weight = torch.einsum('nouv,ncuv->oc',
                                 grad_output,
-                                windows.view(N,-1,H_o,W_o))\
+                                windows.view(batch_size,-1,H_o,W_o))\
                             .view(C_o,C_i,kernel_size,kernel_size)
 
     if bias is not None and ctx.needs_input_grad[2]:
